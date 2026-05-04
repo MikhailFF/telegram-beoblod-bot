@@ -1,0 +1,1 @@
+"""Telegram morale bot package."""
