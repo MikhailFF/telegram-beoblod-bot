@@ -17,6 +17,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PHRASE_DIR = PROJECT_ROOT / "data" / "phrases"
+GREETING_DIR = PROJECT_ROOT / "data" / "greetings"
 
 GREETINGS = [
     "Привет, салага",
@@ -549,8 +550,10 @@ def load_external_phrases(phrase_dir: Path = PHRASE_DIR) -> list[str]:
 
 
 EXTERNAL_PHRASES = load_external_phrases()
+EXTERNAL_GREETINGS = load_external_phrases(GREETING_DIR)
 JOKES.extend(PHRAPOR_LINES)
 JOKES.extend(EXTERNAL_PHRASES)
+GREETINGS.extend(EXTERNAL_GREETINGS)
 
 
 @dataclass(frozen=True)

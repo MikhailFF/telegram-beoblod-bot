@@ -2,7 +2,9 @@ from types import SimpleNamespace
 
 from morale_bot.bot import (
     BotReply,
+    EXTERNAL_GREETINGS,
     EXTERNAL_PHRASES,
+    GREETINGS,
     JOKES,
     build_reply,
     clean_phrase_line,
@@ -67,6 +69,11 @@ def test_joke_bank_has_warrant_officer_variety():
 
 def test_external_phrase_files_are_loaded():
     assert len(EXTERNAL_PHRASES) >= 100
+
+
+def test_external_greetings_are_loaded():
+    assert len(EXTERNAL_GREETINGS) >= 100
+    assert any(greeting in GREETINGS for greeting in EXTERNAL_GREETINGS)
 
 
 def test_clean_phrase_line_skips_headers():
