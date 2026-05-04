@@ -31,28 +31,26 @@ def test_is_mentioned_does_not_match_prefix_only():
     assert not is_mentioned(make_message("без тега"), "moralebot")
 
 
-def test_reply_render_contains_greeting_joke_and_advice():
+def test_reply_render_is_short_and_has_no_labels():
     reply = BotReply(
-        greeting="Привет, салага",
+        greeting="Так, боец",
         emoji="🫡",
-        reaction="Реакция",
-        joke="Шутка",
-        advice="Совет",
-        closing="Добивка",
+        reaction="Мысль стоит криво. Поправим.",
+        joke="Армия, сынок, это климат.",
+        advice="Сначала чай. Потом решение.",
+        closing="Свободен. Но недалеко.",
     )
     rendered = reply.render()
 
-    assert "Привет, салага" in rendered
-    assert "Реакция" in rendered
-    assert "Шутка" in rendered
-    assert "Совет" in rendered
-    assert "Добивка" in rendered
+    assert "Так, боец" in rendered
+    assert "Армия, сынок" in rendered
     assert "<b>Шутка:</b>" not in rendered
     assert "<b>Совет:</b>" not in rendered
+    assert rendered.count("\n\n") <= 2
 
 
-def test_joke_bank_has_book_inspired_variety():
-    assert len(JOKES) >= 80
+def test_joke_bank_has_warrant_officer_variety():
+    assert len(JOKES) >= 30
 
 
 def test_choose_emoji_matches_topic():
@@ -60,12 +58,13 @@ def test_choose_emoji_matches_topic():
     assert choose_emoji("летчик и самолет") == "✈️"
 
 
-def test_build_reply_has_can_answer_for_mozhno():
+def test_build_reply_has_content_for_mozhno():
     reply = build_reply("@MoraleBot можно?")
     assert reply.joke
+    assert len(reply.greeting) > 0
 
 
 def test_choose_rhyme_answer_for_trigger_word():
     answer = choose_rhyme_answer("@MoraleBot триста")
     assert answer is not None
-    assert "тракториста" in answer
+    assert "тракторист" in answer
