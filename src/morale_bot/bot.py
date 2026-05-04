@@ -698,7 +698,11 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     LOGGER.info("Replying in chat %s to message %s", message.chat_id, message.message_id)
-    await message.reply_text(build_reply(message.text or "").render(), parse_mode=ParseMode.HTML)
+    await context.bot.send_message(
+        chat_id=message.chat_id,
+        text=build_reply(message.text or "").render(),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 def create_app(token: str) -> Application:
