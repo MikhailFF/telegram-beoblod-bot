@@ -6,6 +6,7 @@ import random
 import re
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import Message, Update
@@ -14,6 +15,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 
 LOGGER = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PHRASE_DIR = PROJECT_ROOT / "data" / "phrases"
 
 GREETINGS = [
     "Привет, салага",
@@ -507,7 +510,47 @@ PHRAPOR_LINES = [
     "Ну что, орлы, полетели. Пешком, строем и без признаков радости.",
 ]
 
+
+def clean_phrase_line(line: str) -> str | None:
+    line = line.strip()
+    if not line or line.startswith("="):
+        return None
+
+    match = re.match(r"^\s*\d+\.\s*(.+?)\s*$", line)
+    if not match:
+        return None
+
+    phrase = match.group(1).strip()
+    if not phrase or phrase == phrase.upper():
+        return None
+
+    return phrase
+
+
+def load_external_phrases(phrase_dir: Path = PHRASE_DIR) -> list[str]:
+    if not phrase_dir.exists():
+        return []
+
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for phrase_file in sorted(phrase_dir.glob("*.txt")):
+        try:
+            lines = phrase_file.read_text(encoding="utf-8-sig").splitlines()
+        except UnicodeDecodeError:
+            lines = phrase_file.read_text(encoding="cp1251").splitlines()
+
+        for line in lines:
+            phrase = clean_phrase_line(line)
+            if phrase and phrase not in seen:
+                phrases.append(phrase)
+                seen.add(phrase)
+
+    return phrases
+
+
+EXTERNAL_PHRASES = load_external_phrases()
 JOKES.extend(PHRAPOR_LINES)
+JOKES.extend(EXTERNAL_PHRASES)
 
 
 @dataclass(frozen=True)

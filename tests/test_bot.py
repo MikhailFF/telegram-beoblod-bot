@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 from morale_bot.bot import (
     BotReply,
+    EXTERNAL_PHRASES,
     JOKES,
     build_reply,
+    clean_phrase_line,
     choose_emoji,
     choose_rhyme_answer,
     is_private_update,
@@ -61,6 +63,16 @@ def test_reply_render_is_short_and_has_no_labels():
 
 def test_joke_bank_has_warrant_officer_variety():
     assert len(JOKES) >= 30
+
+
+def test_external_phrase_files_are_loaded():
+    assert len(EXTERNAL_PHRASES) >= 100
+
+
+def test_clean_phrase_line_skips_headers():
+    assert clean_phrase_line("1. Боец, мысль стоит криво.") == "Боец, мысль стоит криво."
+    assert clean_phrase_line("1. РУССКИЙ И СОВЕТСКИЙ АРМЕЙСКИЙ АБСУРД") is None
+    assert clean_phrase_line("Оригинальные реплики прапорщика") is None
 
 
 def test_choose_emoji_matches_topic():
