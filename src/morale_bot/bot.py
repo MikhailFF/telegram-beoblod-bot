@@ -603,8 +603,12 @@ async def post_init(app: Application) -> None:
     LOGGER.info("Bot started as @%s", bot.username)
 
 
+def is_private_update(update: Update) -> bool:
+    return bool(update.effective_chat and update.effective_chat.type == ChatType.PRIVATE)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.effective_message:
+    if not update.effective_message or is_private_update(update):
         return
     await update.effective_message.reply_text(
         "Готов поднимать настроение. Тегни меня в чате, и я отвечу шуткой и советом."
@@ -612,19 +616,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def joke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.effective_message:
+    if not update.effective_message or is_private_update(update):
         return
     await update.effective_message.reply_text(random.choice(JOKES))
 
 
 async def advice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.effective_message:
+    if not update.effective_message or is_private_update(update):
         return
     await update.effective_message.reply_text(random.choice(ADVICES))
 
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.effective_message:
+    if not update.effective_message or is_private_update(update):
         return
     await update.effective_message.reply_text("На связи. Тегни меня через @username, и я отвечу шуткой и советом.")
 
@@ -636,7 +640,10 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
 
     bot_username = context.bot_data.get("bot_username") or context.bot.username
     bot_full_name = context.bot_data.get("bot_full_name")
-    is_private_chat = update.effective_chat and update.effective_chat.type == ChatType.PRIVATE
+    if is_private_update(update):
+        LOGGER.info("Ignoring private message %s", message.message_id)
+        return
+
     LOGGER.info(
         "Received text in chat %s (%s): %r",
         message.chat_id,
@@ -644,7 +651,7 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
         message.text,
     )
 
-    if not is_private_chat and not is_mentioned(message, bot_username, bot_full_name):
+    if not is_mentioned(message, bot_username, bot_full_name):
         return
 
     LOGGER.info("Replying in chat %s to message %s", message.chat_id, message.message_id)

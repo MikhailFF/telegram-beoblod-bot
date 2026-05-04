@@ -6,6 +6,7 @@ from morale_bot.bot import (
     build_reply,
     choose_emoji,
     choose_rhyme_answer,
+    is_private_update,
     is_mentioned,
     normalize_username,
 )
@@ -13,6 +14,10 @@ from morale_bot.bot import (
 
 def make_message(text: str):
     return SimpleNamespace(text=text, entities=None)
+
+
+def make_update(chat_type: str):
+    return SimpleNamespace(effective_chat=SimpleNamespace(type=chat_type))
 
 
 def test_normalize_username():
@@ -29,6 +34,11 @@ def test_is_mentioned_matches_exact_bot_name():
 def test_is_mentioned_does_not_match_prefix_only():
     assert not is_mentioned(make_message("@MoraleBotExtra привет"), "moralebot")
     assert not is_mentioned(make_message("без тега"), "moralebot")
+
+
+def test_private_updates_are_blocked():
+    assert is_private_update(make_update("private"))
+    assert not is_private_update(make_update("group"))
 
 
 def test_reply_render_is_short_and_has_no_labels():
