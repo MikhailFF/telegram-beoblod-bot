@@ -420,13 +420,14 @@ def create_app(token: str) -> Application:
 def main() -> None:
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("Set TELEGRAM_BOT_TOKEN in .env or in the environment.")
 
     try:
-        asyncio.get_event_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
