@@ -9,8 +9,9 @@
 - Работает только в группах и супергруппах, личку игнорирует.
 - Отвечает на упоминание `@BeoblodBot`.
 - Отвечает, когда в чате делают reply на сообщение бота.
+- Приветствует каждого пользователя только один раз в день.
 - По умолчанию выбирает фразу из локального банка по словам сообщения.
-- При включенном LLM докручивает локальный черновик под контекст вопроса.
+- При включенном LLM докручивает локальный черновик финальным ответом под контекст вопроса.
 - Если LLM недоступна, бот не падает и отвечает локальной фразой.
 
 ## Установка
@@ -32,7 +33,7 @@ Copy-Item .env.example .env
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-LLM_ENABLED=false
+LLM_ENABLED=auto
 ```
 
 Запуск:
@@ -46,11 +47,12 @@ python -m morale_bot.bot
 LLM-слой опциональный. Бесплатный роутер OpenRouter все равно требует API-ключ.
 
 ```dotenv
-LLM_ENABLED=true
+LLM_ENABLED=auto
 LLM_API_BASE=https://openrouter.ai/api/v1
 LLM_MODEL=openrouter/free
 LLM_API_KEY=your_openrouter_key
 LLM_TIMEOUT_SECONDS=8
+GREETING_STATE_PATH=.state/daily_greetings.json
 ```
 
 Можно также использовать переменную `OPENROUTER_API_KEY` вместо `LLM_API_KEY`.

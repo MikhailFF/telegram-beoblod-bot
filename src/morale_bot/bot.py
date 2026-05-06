@@ -5,7 +5,9 @@ import os
 import random
 import re
 import asyncio
+import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -22,6 +24,7 @@ GREETING_DIR = PROJECT_ROOT / "data" / "greetings"
 DEFAULT_LLM_API_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_LLM_MODEL = "openrouter/free"
 MAX_REPLY_CHARS = 280
+DEFAULT_GREETING_STATE_PATH = PROJECT_ROOT / ".state" / "daily_greetings.json"
 
 GREETINGS = [
     "Привет, салага",
@@ -599,6 +602,74 @@ def strip_bot_reference(text: str, bot_username: str | None = None, bot_full_nam
     return compact_reply(cleaned, max_chars=500)
 
 
+def greeting_state_path() -> Path:
+    configured_path = os.getenv("GREETING_STATE_PATH")
+    if configured_path:
+        return Path(configured_path)
+    return DEFAULT_GREETING_STATE_PATH
+
+
+def today_key() -> str:
+    return datetime.now().date().isoformat()
+
+
+def load_greeting_state(state_path: Path | None = None) -> dict[str, str]:
+    path = state_path or greeting_state_path()
+    if not path.exists():
+        return {}
+
+    try:
+        raw_state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Could not read greeting state from %s: %s", path, exc)
+        return {}
+
+    if not isinstance(raw_state, dict):
+        return {}
+
+    return {str(key): str(value) for key, value in raw_state.items()}
+
+
+def save_greeting_state(state: dict[str, str], state_path: Path | None = None) -> None:
+    path = state_path or greeting_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def greeting_subject_key(message: Message) -> str:
+    user = getattr(message, "from_user", None)
+    if user and getattr(user, "id", None):
+        return f"user:{user.id}"
+
+    if user and getattr(user, "username", None):
+        return f"username:{normalize_username(user.username)}"
+
+    return f"chat:{getattr(message, 'chat_id', 'unknown')}:anonymous"
+
+
+def should_greet_today(
+    message: Message,
+    today: str | None = None,
+    state_path: Path | None = None,
+) -> bool:
+    current_day = today or today_key()
+    subject_key = greeting_subject_key(message)
+    state = load_greeting_state(state_path)
+    already_greeted = state.get(subject_key) == current_day
+
+    if not already_greeted:
+        state = {key: value for key, value in state.items() if value == current_day}
+        state[subject_key] = current_day
+        try:
+            save_greeting_state(state, state_path)
+        except OSError as exc:
+            LOGGER.warning("Could not save greeting state: %s", exc)
+
+    return not already_greeted
+
+
 def choose_contextual_line(user_text: str) -> str:
     rhyme_answer = choose_rhyme_answer(user_text)
     if rhyme_answer:
@@ -625,31 +696,61 @@ def choose_contextual_line(user_text: str) -> str:
     return random.choice(best)
 
 
-def build_local_reply_text(user_text: str, bot_username: str | None = None, bot_full_name: str | None = None) -> str:
+def build_local_reply_text(
+    user_text: str,
+    bot_username: str | None = None,
+    bot_full_name: str | None = None,
+    include_greeting: bool = True,
+) -> str:
     cleaned_user_text = strip_bot_reference(user_text, bot_username, bot_full_name)
     line = choose_contextual_line(cleaned_user_text)
-    greeting = random.choice(GREETINGS)
     emoji = choose_emoji(f"{cleaned_user_text} {line}")
+    if not include_greeting:
+        return compact_reply(f"{emoji} {line}")
+
+    greeting = random.choice(GREETINGS)
     return compact_reply(f"{emoji} {greeting} {line}")
 
 
 def llm_enabled() -> bool:
-    flag = os.getenv("LLM_ENABLED", "false").strip().lower()
+    flag = os.getenv("LLM_ENABLED", "auto").strip().lower()
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-    return flag in {"1", "true", "yes", "on"} and bool(api_key)
+    if flag in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(api_key)
 
 
-def build_llm_messages(user_text: str, draft: str) -> list[dict[str, str]]:
+def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> list[dict[str, str]]:
+    greeting_rule = (
+        "Сегодня с этим человеком еще не здоровались: начни с одного короткого грубовато-ласкательного приветствия "
+        "или обращения в роли."
+        if include_greeting
+        else "Сегодня с этим человеком уже здоровались: НЕ здоровайся, не начинай с 'привет', 'здравия', 'салют' "
+        "или похожих приветствий. Можно использовать короткое обращение внутри ответа без приветствия."
+    )
     system_prompt = (
-        "Ты отвечаешь как оригинальный собирательный образ: дерзкий, прожженный, "
-        "слегка пьяный армейский прапорщик старой школы. Не копируй фильмы и персонажей. "
-        "Ответь ровно одной короткой фразой по-русски, без Markdown, без списков, без кавычек. "
-        "Фраза должна быть в контексте сообщения, в стиле казарменного абсурда, но без реальных угроз."
+        "Ты играешь роль дерзкого, прожженного, слегка пьяного армейского прапорщика старой школы. "
+        "Это оригинальный собирательный образ из казармы, каптерки, наряда и вечного утреннего построения, "
+        "а не копия конкретного персонажа. Отвечай по-русски. "
+        "Ответы должны быть хлесткими, четкими, короткими и ударными. Никакой размазанной болтовни, "
+        "штабной воды и интеллигентного мямления. Говори так, будто у тебя в одной руке кружка чая из каптерки, "
+        "в другой ведомость, а перед тобой солдат, который опять 'все понял', но сделал наоборот. "
+        "Допускается грубый армейский юмор, легкий мат, казарменные подколы и оскорбительно-ласкательное "
+        "принижение солдатской сообразительности: салага, воин табуреточный, чучело-мяучело, ошибка природы "
+        "в берцах, пельмень тактический, носок одинокий, гений недосыпа, кабачок мобилизованный, "
+        "солдат неизвестного назначения, боевой недоразумец. "
+        "Резкость комедийная и ролевая: без настоящей травли, угроз, дискриминации, сексуальных оскорблений, "
+        "ненависти и призывов к насилию. Мат используй как интонацию и усилитель, а не поток брани. "
+        "Формула ответа: 1) хлесткая реакция или обращение, 2) четкий ответ по делу, 3) короткий язвительный "
+        "вывод или команда. Но все это должно поместиться в одну короткую фразу. "
+        "Не используй Markdown, списки, кавычки и длинные объяснения. "
+        f"{greeting_rule}"
     )
     user_prompt = (
         f"Сообщение в чате: {user_text}\n"
-        f"Черновик из банка фраз: {draft}\n"
-        "Сделай один короткий финальный ответ в роли. До 28 слов."
+        f"Черновик из локального банка, который можно переработать или отбросить: {draft}\n"
+        "Сделай финальный ответ строго в контексте сообщения. Одна фраза, до 26 слов. "
+        "Сначала смысл и польза, потом казарменная приправа."
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -657,7 +758,7 @@ def build_llm_messages(user_text: str, draft: str) -> list[dict[str, str]]:
     ]
 
 
-async def refine_with_llm(user_text: str, draft: str) -> str | None:
+async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) -> str | None:
     if not llm_enabled():
         return None
 
@@ -668,7 +769,7 @@ async def refine_with_llm(user_text: str, draft: str) -> str | None:
 
     payload = {
         "model": model,
-        "messages": build_llm_messages(user_text, draft),
+        "messages": build_llm_messages(user_text, draft, include_greeting),
         "temperature": 0.8,
         "max_tokens": 90,
     }
@@ -776,10 +877,11 @@ async def build_response_text(
     user_text: str,
     bot_username: str | None = None,
     bot_full_name: str | None = None,
+    include_greeting: bool = True,
 ) -> str:
     cleaned_user_text = strip_bot_reference(user_text, bot_username, bot_full_name)
-    draft = build_local_reply_text(cleaned_user_text, bot_username, bot_full_name)
-    refined = await refine_with_llm(cleaned_user_text, draft)
+    draft = build_local_reply_text(cleaned_user_text, bot_username, bot_full_name, include_greeting)
+    refined = await refine_with_llm(cleaned_user_text, draft, include_greeting)
     return refined or draft
 
 
@@ -848,10 +950,11 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_triggered:
         return
 
+    include_greeting = should_greet_today(message)
     LOGGER.info("Replying in chat %s to message %s", message.chat_id, message.message_id)
     await context.bot.send_message(
         chat_id=message.chat_id,
-        text=await build_response_text(message.text or "", bot_username, bot_full_name),
+        text=await build_response_text(message.text or "", bot_username, bot_full_name, include_greeting),
     )
 
 

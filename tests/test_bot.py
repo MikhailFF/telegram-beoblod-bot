@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 from morale_bot.bot import (
     BotReply,
@@ -6,6 +7,7 @@ from morale_bot.bot import (
     EXTERNAL_PHRASES,
     GREETINGS,
     JOKES,
+    build_llm_messages,
     build_local_reply_text,
     build_reply,
     clean_phrase_line,
@@ -17,11 +19,13 @@ from morale_bot.bot import (
     is_private_update,
     is_mentioned,
     normalize_username,
+    should_greet_today,
 )
 
 
-def make_message(text: str):
-    return SimpleNamespace(text=text, entities=None)
+def make_message(text: str, user_id=7, username="User"):
+    user = SimpleNamespace(id=user_id, username=username)
+    return SimpleNamespace(text=text, entities=None, from_user=user, chat_id=-100)
 
 
 def make_reply_message(reply_user_id=42, reply_username="MoraleBot"):
@@ -88,6 +92,35 @@ def test_local_reply_is_one_short_line():
     rendered = build_local_reply_text("@MoraleBot я устал")
     assert "\n" not in rendered
     assert len(rendered) <= 280
+
+
+def test_local_reply_can_skip_daily_greeting():
+    rendered = build_local_reply_text("@MoraleBot СЏ СѓСЃС‚Р°Р»", include_greeting=False)
+    assert "\n" not in rendered
+    assert len(rendered) <= 280
+    assert not any(greeting in rendered for greeting in GREETINGS[:20])
+
+
+def test_should_greet_today_only_once_per_user():
+    state_path = Path("tests") / ".daily_greetings_test.json"
+    message = make_message("@MoraleBot РїРѕРјРѕРіРё", user_id=123, username="soldier")
+
+    try:
+        assert should_greet_today(message, today="2026-05-07", state_path=state_path)
+        assert not should_greet_today(message, today="2026-05-07", state_path=state_path)
+        assert should_greet_today(message, today="2026-05-08", state_path=state_path)
+    finally:
+        state_path.unlink(missing_ok=True)
+        state_path.with_suffix(f"{state_path.suffix}.tmp").unlink(missing_ok=True)
+
+
+def test_llm_prompt_controls_daily_greeting():
+    first_messages = build_llm_messages("СЏ СѓСЃС‚Р°Р»", "draft", include_greeting=True)
+    repeat_messages = build_llm_messages("СЏ СѓСЃС‚Р°Р»", "draft", include_greeting=False)
+
+    assert "еще не здоровались" in first_messages[0]["content"]
+    assert "НЕ здоровайся" in repeat_messages[0]["content"]
+    assert "строго в контексте" in repeat_messages[1]["content"]
 
 
 def test_reply_to_bot_is_triggered_by_bot_id_or_username():
