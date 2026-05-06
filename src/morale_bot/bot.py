@@ -8,9 +8,10 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from telegram import Message, Update
-from telegram.constants import ChatType, ParseMode
+from telegram.constants import ChatType
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 
@@ -18,6 +19,9 @@ LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PHRASE_DIR = PROJECT_ROOT / "data" / "phrases"
 GREETING_DIR = PROJECT_ROOT / "data" / "greetings"
+DEFAULT_LLM_API_BASE = "https://openrouter.ai/api/v1"
+DEFAULT_LLM_MODEL = "openrouter/free"
+MAX_REPLY_CHARS = 280
 
 GREETINGS = [
     "Привет, салага",
@@ -566,11 +570,131 @@ class BotReply:
     closing: str
 
     def render(self) -> str:
-        tail = random.choice([self.advice, self.closing, ""])
-        parts = [f"{self.emoji} <b>{self.greeting}.</b>", self.joke]
-        if tail:
-            parts.append(tail)
-        return "\n\n".join(parts)
+        return compact_reply(f"{self.emoji} {self.greeting} {self.joke}")
+
+
+def compact_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.strip("\"'«»")
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip(" ,;:") + "…"
+
+
+def text_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-zА-Яа-яЁё0-9]{3,}", text.lower())
+        if token not in {"beoblodbot", "bot", "бот"}
+    }
+
+
+def strip_bot_reference(text: str, bot_username: str | None = None, bot_full_name: str | None = None) -> str:
+    cleaned = text or ""
+    username = normalize_username(bot_username)
+    if username:
+        cleaned = re.sub(rf"(?<!\w)@?{re.escape(username)}(?!\w)", "", cleaned, flags=re.IGNORECASE)
+    if bot_full_name:
+        cleaned = re.sub(rf"(?<!\w){re.escape(bot_full_name)}(?!\w)", "", cleaned, flags=re.IGNORECASE)
+    return compact_reply(cleaned, max_chars=500)
+
+
+def choose_contextual_line(user_text: str) -> str:
+    rhyme_answer = choose_rhyme_answer(user_text)
+    if rhyme_answer:
+        return rhyme_answer
+
+    if re.search(r"\bможно\b", user_text, re.IGNORECASE):
+        return random.choice(CAN_ANSWERS)
+
+    tokens = text_tokens(user_text)
+    if not tokens:
+        return random.choice(JOKES)
+
+    scored: list[tuple[int, str]] = []
+    for candidate in JOKES:
+        score = len(tokens & text_tokens(candidate))
+        if score:
+            scored.append((score, candidate))
+
+    if not scored:
+        return random.choice(JOKES)
+
+    best_score = max(score for score, _ in scored)
+    best = [candidate for score, candidate in scored if score == best_score]
+    return random.choice(best)
+
+
+def build_local_reply_text(user_text: str, bot_username: str | None = None, bot_full_name: str | None = None) -> str:
+    cleaned_user_text = strip_bot_reference(user_text, bot_username, bot_full_name)
+    line = choose_contextual_line(cleaned_user_text)
+    greeting = random.choice(GREETINGS)
+    emoji = choose_emoji(f"{cleaned_user_text} {line}")
+    return compact_reply(f"{emoji} {greeting} {line}")
+
+
+def llm_enabled() -> bool:
+    flag = os.getenv("LLM_ENABLED", "false").strip().lower()
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    return flag in {"1", "true", "yes", "on"} and bool(api_key)
+
+
+def build_llm_messages(user_text: str, draft: str) -> list[dict[str, str]]:
+    system_prompt = (
+        "Ты отвечаешь как оригинальный собирательный образ: дерзкий, прожженный, "
+        "слегка пьяный армейский прапорщик старой школы. Не копируй фильмы и персонажей. "
+        "Ответь ровно одной короткой фразой по-русски, без Markdown, без списков, без кавычек. "
+        "Фраза должна быть в контексте сообщения, в стиле казарменного абсурда, но без реальных угроз."
+    )
+    user_prompt = (
+        f"Сообщение в чате: {user_text}\n"
+        f"Черновик из банка фраз: {draft}\n"
+        "Сделай один короткий финальный ответ в роли. До 28 слов."
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+async def refine_with_llm(user_text: str, draft: str) -> str | None:
+    if not llm_enabled():
+        return None
+
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    api_base = os.getenv("LLM_API_BASE", DEFAULT_LLM_API_BASE).rstrip("/")
+    model = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
+    timeout = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
+
+    payload = {
+        "model": model,
+        "messages": build_llm_messages(user_text, draft),
+        "temperature": 0.8,
+        "max_tokens": 90,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/MikhailFF/telegram-beoblod-bot",
+        "X-Title": "Telegram Beoblod Bot",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{api_base}/chat/completions", json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        LOGGER.warning("LLM refinement failed: %s", exc)
+        return None
+
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        LOGGER.warning("LLM response did not contain a chat completion")
+        return None
+
+    return compact_reply(content)
 
 
 def choose_emoji(text: str) -> str:
@@ -599,13 +723,7 @@ def choose_rhyme_answer(user_text: str) -> str | None:
 
 
 def build_reply(user_text: str = "") -> BotReply:
-    rhyme_answer = choose_rhyme_answer(user_text)
-    if rhyme_answer and random.random() < 0.65:
-        joke = rhyme_answer
-    elif re.search(r"\bможно\b", user_text, re.IGNORECASE):
-        joke = random.choice(CAN_ANSWERS)
-    else:
-        joke = random.choice(JOKES)
+    joke = choose_contextual_line(user_text)
 
     return BotReply(
         greeting=random.choice(GREETINGS),
@@ -642,8 +760,32 @@ def is_mentioned(message: Message, bot_username: str | None, bot_full_name: str 
     return any(re.search(pattern, message.text, flags=re.IGNORECASE) for pattern in checks)
 
 
+def is_reply_to_bot(message: Message, bot_id: int | None, bot_username: str | None) -> bool:
+    reply = getattr(message, "reply_to_message", None)
+    if not reply or not getattr(reply, "from_user", None):
+        return False
+
+    from_user = reply.from_user
+    if bot_id and getattr(from_user, "id", None) == bot_id:
+        return True
+
+    return normalize_username(getattr(from_user, "username", None)) == normalize_username(bot_username)
+
+
+async def build_response_text(
+    user_text: str,
+    bot_username: str | None = None,
+    bot_full_name: str | None = None,
+) -> str:
+    cleaned_user_text = strip_bot_reference(user_text, bot_username, bot_full_name)
+    draft = build_local_reply_text(cleaned_user_text, bot_username, bot_full_name)
+    refined = await refine_with_llm(cleaned_user_text, draft)
+    return refined or draft
+
+
 async def post_init(app: Application) -> None:
     bot = await app.bot.get_me()
+    app.bot_data["bot_id"] = bot.id
     app.bot_data["bot_username"] = bot.username
     app.bot_data["bot_full_name"] = bot.full_name
     LOGGER.info("Bot started as @%s", bot.username)
@@ -685,6 +827,7 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     bot_username = context.bot_data.get("bot_username") or context.bot.username
+    bot_id = context.bot_data.get("bot_id")
     bot_full_name = context.bot_data.get("bot_full_name")
     if is_private_update(update):
         LOGGER.info("Ignoring private message %s", message.message_id)
@@ -697,14 +840,18 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
         message.text,
     )
 
-    if not is_mentioned(message, bot_username, bot_full_name):
+    is_triggered = is_mentioned(message, bot_username, bot_full_name) or is_reply_to_bot(
+        message,
+        bot_id,
+        bot_username,
+    )
+    if not is_triggered:
         return
 
     LOGGER.info("Replying in chat %s to message %s", message.chat_id, message.message_id)
     await context.bot.send_message(
         chat_id=message.chat_id,
-        text=build_reply(message.text or "").render(),
-        parse_mode=ParseMode.HTML,
+        text=await build_response_text(message.text or "", bot_username, bot_full_name),
     )
 
 

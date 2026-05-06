@@ -6,10 +6,14 @@ from morale_bot.bot import (
     EXTERNAL_PHRASES,
     GREETINGS,
     JOKES,
+    build_local_reply_text,
     build_reply,
     clean_phrase_line,
     choose_emoji,
+    choose_contextual_line,
     choose_rhyme_answer,
+    compact_reply,
+    is_reply_to_bot,
     is_private_update,
     is_mentioned,
     normalize_username,
@@ -18,6 +22,12 @@ from morale_bot.bot import (
 
 def make_message(text: str):
     return SimpleNamespace(text=text, entities=None)
+
+
+def make_reply_message(reply_user_id=42, reply_username="MoraleBot"):
+    reply_user = SimpleNamespace(id=reply_user_id, username=reply_username)
+    reply_to = SimpleNamespace(from_user=reply_user)
+    return SimpleNamespace(text="ну что", entities=None, reply_to_message=reply_to)
 
 
 def make_update(chat_type: str):
@@ -61,6 +71,29 @@ def test_reply_render_is_short_and_has_no_labels():
     assert "<b>Шутка:</b>" not in rendered
     assert "<b>Совет:</b>" not in rendered
     assert rendered.count("\n\n") <= 2
+
+
+def test_compact_reply_is_single_line():
+    rendered = compact_reply("  one\n\n two  ", max_chars=20)
+    assert rendered == "one two"
+    assert "\n" not in rendered
+
+
+def test_contextual_reply_uses_message_tokens():
+    line = choose_contextual_line("я устал")
+    assert "устал" in line.lower()
+
+
+def test_local_reply_is_one_short_line():
+    rendered = build_local_reply_text("@MoraleBot я устал")
+    assert "\n" not in rendered
+    assert len(rendered) <= 280
+
+
+def test_reply_to_bot_is_triggered_by_bot_id_or_username():
+    assert is_reply_to_bot(make_reply_message(reply_user_id=42), 42, "OtherBot")
+    assert is_reply_to_bot(make_reply_message(reply_user_id=7, reply_username="MoraleBot"), 42, "@MoraleBot")
+    assert not is_reply_to_bot(make_reply_message(reply_user_id=7, reply_username="OtherBot"), 42, "@MoraleBot")
 
 
 def test_joke_bank_has_warrant_officer_variety():
