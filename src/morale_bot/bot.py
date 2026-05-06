@@ -22,9 +22,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PHRASE_DIR = PROJECT_ROOT / "data" / "phrases"
 GREETING_DIR = PROJECT_ROOT / "data" / "greetings"
 DEFAULT_LLM_API_BASE = "https://openrouter.ai/api/v1"
-DEFAULT_LLM_MODEL = "openrouter/free"
+DEFAULT_LLM_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
 MAX_REPLY_CHARS = 280
 DEFAULT_GREETING_STATE_PATH = PROJECT_ROOT / ".state" / "daily_greetings.json"
+PROFANITY_MARKERS = ("бляд", "хер", "хрен", "еб", "ёб", "пизд", "сука", "сран")
+STYLE_ENDINGS = [
+    "блядь",
+    "мать его",
+    "херню не множь",
+    "пельмень тактический",
+]
 
 GREETINGS = [
     "Привет, салага",
@@ -584,6 +591,61 @@ def compact_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
     return text[: max_chars - 1].rstrip(" ,;:") + "…"
 
 
+def has_profanity(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in PROFANITY_MARKERS)
+
+
+def cyrillic_ratio(text: str) -> float:
+    letters = re.findall(r"[A-Za-zА-Яа-яЁё]", text)
+    if not letters:
+        return 0.0
+    cyrillic_letters = [letter for letter in letters if re.match(r"[А-Яа-яЁё]", letter)]
+    return len(cyrillic_letters) / len(letters)
+
+
+def clean_llm_content(text: str) -> str:
+    text = re.sub(r"<think>.*?</think>", " ", text or "", flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"^\s*[-*•\d.)]+\s*", "", text)
+    text = text.replace("`", "").replace("*", "")
+    return compact_reply(text)
+
+
+def looks_like_bad_llm_reply(text: str) -> bool:
+    lowered = text.lower()
+    bad_fragments = (
+        "as an ai",
+        "i cannot",
+        "sorry",
+        "извините",
+        "извини",
+        "я не могу",
+        "как искусственный интеллект",
+        "не могу помочь",
+        "могу помочь",
+        "markdown",
+    )
+    return not text or cyrillic_ratio(text) < 0.7 or any(fragment in lowered for fragment in bad_fragments)
+
+
+def add_role_bite(text: str) -> str:
+    text = compact_reply(text)
+    if not text or has_profanity(text):
+        return text
+
+    ending = random.choice(STYLE_ENDINGS)
+    text = text.rstrip(" .!?…")
+    return compact_reply(f"{text}, {ending}.")
+
+
+def finalize_llm_reply(content: str, fallback: str) -> str:
+    cleaned = clean_llm_content(content)
+    if looks_like_bad_llm_reply(cleaned):
+        cleaned = fallback
+    return add_role_bite(cleaned)
+
+
 def text_tokens(text: str) -> set[str]:
     return {
         token
@@ -732,6 +794,10 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
         "Ты играешь роль дерзкого, прожженного, слегка пьяного армейского прапорщика старой школы. "
         "Это оригинальный собирательный образ из казармы, каптерки, наряда и вечного утреннего построения, "
         "а не копия конкретного персонажа. Отвечай по-русски. "
+        "Ты ОБЯЗАН ответить строго на смысл сообщения пользователя, без ухода в случайную байку. "
+        "Если вопрос практический - дай конкретное действие. Если человек устал или злится - коротко поддержи. "
+        "Если это словесная ловушка или рифма - ответь в рифму. "
+        "Русский должен быть грамотный, живой и разговорный: без машинных ошибок, канцелярита и англицизмов. "
         "Ответы должны быть хлесткими, четкими, короткими и ударными. Никакой размазанной болтовни, "
         "штабной воды и интеллигентного мямления. Говори так, будто у тебя в одной руке кружка чая из каптерки, "
         "в другой ведомость, а перед тобой солдат, который опять 'все понял', но сделал наоборот. "
@@ -741,6 +807,8 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
         "солдат неизвестного назначения, боевой недоразумец. "
         "Резкость комедийная и ролевая: без настоящей травли, угроз, дискриминации, сексуальных оскорблений, "
         "ненависти и призывов к насилию. Мат используй как интонацию и усилитель, а не поток брани. "
+        "В большинстве ответов вставь ровно одно короткое матерное усиление вроде 'блядь', 'хрен', 'херня', "
+        "'мать его', если это не ломает смысл. "
         "Формула ответа: 1) хлесткая реакция или обращение, 2) четкий ответ по делу, 3) короткий язвительный "
         "вывод или команда. Но все это должно поместиться в одну короткую фразу. "
         "Не используй Markdown, списки, кавычки и длинные объяснения. "
@@ -749,8 +817,8 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
     user_prompt = (
         f"Сообщение в чате: {user_text}\n"
         f"Черновик из локального банка, который можно переработать или отбросить: {draft}\n"
-        "Сделай финальный ответ строго в контексте сообщения. Одна фраза, до 26 слов. "
-        "Сначала смысл и польза, потом казарменная приправа."
+        "Сделай финальный ответ строго в контексте сообщения. Одна фраза, 8-20 слов. "
+        "Ответь только готовой репликой бота. Сначала смысл и польза, потом казарменная приправа."
     )
     return [
         {"role": "system", "content": system_prompt},
@@ -770,8 +838,9 @@ async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) ->
     payload = {
         "model": model,
         "messages": build_llm_messages(user_text, draft, include_greeting),
-        "temperature": 0.8,
-        "max_tokens": 90,
+        "temperature": 0.35,
+        "top_p": 0.85,
+        "max_tokens": 70,
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -795,7 +864,7 @@ async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) ->
         LOGGER.warning("LLM response did not contain a chat completion")
         return None
 
-    return compact_reply(content)
+    return finalize_llm_reply(content, draft)
 
 
 def choose_emoji(text: str) -> str:

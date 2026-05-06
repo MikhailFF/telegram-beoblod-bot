@@ -44,12 +44,12 @@ python -m morale_bot.bot
 
 ## LLM
 
-LLM-слой опциональный. Бесплатный роутер OpenRouter все равно требует API-ключ.
+LLM-слой опциональный. Бот закреплен на бесплатной Qwen-модели OpenRouter, но API-ключ все равно нужен.
 
 ```dotenv
 LLM_ENABLED=auto
 LLM_API_BASE=https://openrouter.ai/api/v1
-LLM_MODEL=openrouter/free
+LLM_MODEL=qwen/qwen3-next-80b-a3b-instruct:free
 LLM_API_KEY=your_openrouter_key
 LLM_TIMEOUT_SECONDS=8
 GREETING_STATE_PATH=.state/daily_greetings.json

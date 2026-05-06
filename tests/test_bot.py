@@ -7,6 +7,7 @@ from morale_bot.bot import (
     EXTERNAL_PHRASES,
     GREETINGS,
     JOKES,
+    DEFAULT_LLM_MODEL,
     build_llm_messages,
     build_local_reply_text,
     build_reply,
@@ -15,6 +16,8 @@ from morale_bot.bot import (
     choose_contextual_line,
     choose_rhyme_answer,
     compact_reply,
+    finalize_llm_reply,
+    looks_like_bad_llm_reply,
     is_reply_to_bot,
     is_private_update,
     is_mentioned,
@@ -121,6 +124,23 @@ def test_llm_prompt_controls_daily_greeting():
     assert "еще не здоровались" in first_messages[0]["content"]
     assert "НЕ здоровайся" in repeat_messages[0]["content"]
     assert "строго в контексте" in repeat_messages[1]["content"]
+
+
+def test_llm_uses_specific_free_qwen_model():
+    assert DEFAULT_LLM_MODEL == "qwen/qwen3-next-80b-a3b-instruct:free"
+
+
+def test_bad_llm_reply_is_rejected():
+    assert looks_like_bad_llm_reply("Sorry, as an AI I cannot help.")
+    assert not looks_like_bad_llm_reply("Так, боец, сначала сядь и выдохни.")
+
+
+def test_final_llm_reply_cleans_thinking_and_adds_bite():
+    rendered = finalize_llm_reply("<think>secret</think>Так, боец, сначала выдохни.", "Запасной ответ.")
+    lowered = rendered.lower()
+
+    assert "think" not in lowered
+    assert any(marker in lowered for marker in ("бляд", "хер", "мать", "пельмень"))
 
 
 def test_reply_to_bot_is_triggered_by_bot_id_or_username():
