@@ -51,7 +51,7 @@ LLM_ENABLED=auto
 LLM_API_BASE=https://openrouter.ai/api/v1
 LLM_MODEL=qwen/qwen3-next-80b-a3b-instruct:free
 LLM_API_KEY=your_openrouter_key
-LLM_TIMEOUT_SECONDS=8
+LLM_TIMEOUT_SECONDS=12
 GREETING_STATE_PATH=.state/daily_greetings.json
 ```
 

@@ -951,7 +951,7 @@ async def build_response_text(
     cleaned_user_text = strip_bot_reference(user_text, bot_username, bot_full_name)
     draft = build_local_reply_text(cleaned_user_text, bot_username, bot_full_name, include_greeting)
     refined = await refine_with_llm(cleaned_user_text, draft, include_greeting)
-    return refined or draft
+    return refined or add_role_bite(draft)
 
 
 async def post_init(app: Application) -> None:

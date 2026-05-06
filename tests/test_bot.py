@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from pathlib import Path
+import asyncio
 
 from morale_bot.bot import (
     BotReply,
@@ -8,6 +9,7 @@ from morale_bot.bot import (
     GREETINGS,
     JOKES,
     DEFAULT_LLM_MODEL,
+    build_response_text,
     build_llm_messages,
     build_local_reply_text,
     build_reply,
@@ -140,6 +142,14 @@ def test_final_llm_reply_cleans_thinking_and_adds_bite():
     lowered = rendered.lower()
 
     assert "think" not in lowered
+    assert any(marker in lowered for marker in ("бляд", "хер", "мать", "пельмень"))
+
+
+def test_response_fallback_keeps_role_bite(monkeypatch):
+    monkeypatch.setenv("LLM_ENABLED", "false")
+    rendered = asyncio.run(build_response_text("@MoraleBot я устал", "MoraleBot", None, include_greeting=False))
+    lowered = rendered.lower()
+
     assert any(marker in lowered for marker in ("бляд", "хер", "мать", "пельмень"))
 
 
