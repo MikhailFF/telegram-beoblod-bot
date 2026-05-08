@@ -25,6 +25,7 @@ DEFAULT_LLM_API_BASE = "https://api.deepseek.com"
 DEFAULT_LLM_MODEL = "deepseek-chat"
 DEFAULT_LLM_FALLBACK_MODELS: tuple[str, ...] = ()
 MAX_REPLY_CHARS = 280
+MAX_REPLY_WORDS = 26
 DEFAULT_GREETING_STATE_PATH = PROJECT_ROOT / ".state" / "daily_greetings.json"
 PROFANITY_MARKERS = ("бляд", "хер", "хрен", "еб", "ёб", "пизд", "сука", "сран")
 STYLE_ENDINGS = [
@@ -592,6 +593,13 @@ def compact_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
     return text[: max_chars - 1].rstrip(" ,;:") + "…"
 
 
+def limit_reply_words(text: str, max_words: int = MAX_REPLY_WORDS) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]).rstrip(" ,;:.!?…") + "…"
+
+
 def has_profanity(text: str) -> bool:
     lowered = text.lower()
     return any(marker in lowered for marker in PROFANITY_MARKERS)
@@ -633,11 +641,11 @@ def looks_like_bad_llm_reply(text: str) -> bool:
 def add_role_bite(text: str) -> str:
     text = compact_reply(text)
     if not text or has_profanity(text):
-        return text
+        return limit_reply_words(text)
 
     ending = random.choice(STYLE_ENDINGS)
     text = text.rstrip(" .!?…")
-    return compact_reply(f"{text}, {ending}.")
+    return limit_reply_words(compact_reply(f"{text}, {ending}."))
 
 
 def finalize_llm_reply(content: str, fallback: str) -> str:
@@ -835,6 +843,7 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
         "Если сообщение содержит reply-контекст, сначала пойми связь между предыдущим сообщением и новым вопросом. "
         "Не подменяй ответ случайной фразой из базы. База - только стилистическая приправа, не источник смысла. "
         "Запрещено отвечать общими фразами про каптерку, устав, журнал или бардак, если это не отвечает на вопрос. "
+        "Не выдумывай настройки, права, команды и факты. Если не уверен, дай простой универсальный шаг без фантазий. "
         "На вопрос 'что это значит' объясни значение. На 'можно ли' ответь да/нет и условие. На 'как сделать' дай шаг. "
         "На 'почему' дай причину. На 'что делать' дай действие. "
         "Русский должен быть грамотный, живой и разговорный: без машинных ошибок, канцелярита и англицизмов. "
@@ -857,7 +866,7 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
     user_prompt = (
         f"Контекст и сообщение пользователя: {user_text}\n"
         f"Стилевая приправа из локальной базы, НЕ готовый ответ: {draft}\n"
-        "Сделай финальный ответ строго в контексте сообщения. Одна фраза, 8-20 слов. "
+        "Сделай финальный ответ строго в контексте сообщения. Одна фраза, 8-18 слов. "
         "Ответь только готовой репликой бота. Сначала смысл и польза, потом казарменная приправа."
     )
     return [

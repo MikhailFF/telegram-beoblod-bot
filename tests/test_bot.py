@@ -9,6 +9,7 @@ from morale_bot.bot import (
     GREETINGS,
     JOKES,
     DEFAULT_LLM_MODEL,
+    MAX_REPLY_WORDS,
     build_response_text,
     build_message_context,
     build_llm_messages,
@@ -20,6 +21,7 @@ from morale_bot.bot import (
     choose_rhyme_answer,
     compact_reply,
     finalize_llm_reply,
+    limit_reply_words,
     looks_like_bad_llm_reply,
     llm_models,
     is_reply_to_bot,
@@ -90,6 +92,12 @@ def test_compact_reply_is_single_line():
     assert "\n" not in rendered
 
 
+def test_limit_reply_words_truncates_long_answer():
+    rendered = limit_reply_words(" ".join(f"word{i}" for i in range(MAX_REPLY_WORDS + 5)))
+    assert len(rendered.split()) <= MAX_REPLY_WORDS
+    assert rendered.endswith("…")
+
+
 def test_contextual_reply_uses_message_tokens():
     line = choose_contextual_line("я устал")
     assert "устал" in line.lower()
@@ -149,6 +157,7 @@ def test_final_llm_reply_cleans_thinking_and_adds_bite():
 
     assert "think" not in lowered
     assert any(marker in lowered for marker in ("бляд", "хер", "мать", "пельмень"))
+    assert len(rendered.split()) <= MAX_REPLY_WORDS
 
 
 def test_response_fallback_keeps_role_bite(monkeypatch):
