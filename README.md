@@ -11,7 +11,7 @@
 - Отвечает, когда в чате делают reply на сообщение бота.
 - Приветствует каждого пользователя только один раз в день.
 - По умолчанию выбирает фразу из локального банка по словам сообщения.
-- При включенном LLM докручивает локальный черновик финальным ответом под контекст вопроса.
+- При включенном LLM отвечает по смыслу вопроса, а локальную базу использует только как стиль.
 - Если LLM недоступна, бот не падает и отвечает локальной фразой.
 
 ## Установка
@@ -44,18 +44,17 @@ python -m morale_bot.bot
 
 ## LLM
 
-LLM-слой опциональный. Бот закреплен на бесплатной Qwen-модели OpenRouter, но API-ключ все равно нужен.
+LLM-слой опциональный. Бот настроен на OpenAI-compatible DeepSeek API.
 
 ```dotenv
 LLM_ENABLED=auto
-LLM_API_BASE=https://openrouter.ai/api/v1
-LLM_MODEL=qwen/qwen3-next-80b-a3b-instruct:free
-LLM_API_KEY=your_openrouter_key
+LLM_API_BASE=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-flash
+LLM_FALLBACK_MODELS=deepseek-chat
+LLM_API_KEY=your_deepseek_key
 LLM_TIMEOUT_SECONDS=12
 GREETING_STATE_PATH=.state/daily_greetings.json
 ```
-
-Можно также использовать переменную `OPENROUTER_API_KEY` вместо `LLM_API_KEY`.
 
 ## Проверка
 

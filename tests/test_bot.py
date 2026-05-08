@@ -10,6 +10,7 @@ from morale_bot.bot import (
     JOKES,
     DEFAULT_LLM_MODEL,
     build_response_text,
+    build_message_context,
     build_llm_messages,
     build_local_reply_text,
     build_reply,
@@ -20,6 +21,7 @@ from morale_bot.bot import (
     compact_reply,
     finalize_llm_reply,
     looks_like_bad_llm_reply,
+    llm_models,
     is_reply_to_bot,
     is_private_update,
     is_mentioned,
@@ -33,9 +35,9 @@ def make_message(text: str, user_id=7, username="User"):
     return SimpleNamespace(text=text, entities=None, from_user=user, chat_id=-100)
 
 
-def make_reply_message(reply_user_id=42, reply_username="MoraleBot"):
+def make_reply_message(reply_user_id=42, reply_username="MoraleBot", reply_text="Предыдущий ответ бота"):
     reply_user = SimpleNamespace(id=reply_user_id, username=reply_username)
-    reply_to = SimpleNamespace(from_user=reply_user)
+    reply_to = SimpleNamespace(from_user=reply_user, text=reply_text, caption=None)
     return SimpleNamespace(text="ну что", entities=None, reply_to_message=reply_to)
 
 
@@ -128,8 +130,12 @@ def test_llm_prompt_controls_daily_greeting():
     assert "строго в контексте" in repeat_messages[1]["content"]
 
 
-def test_llm_uses_specific_free_qwen_model():
-    assert DEFAULT_LLM_MODEL == "qwen/qwen3-next-80b-a3b-instruct:free"
+def test_llm_uses_deepseek_model_with_fallback(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_FALLBACK_MODELS", raising=False)
+
+    assert DEFAULT_LLM_MODEL == "deepseek-v4-flash"
+    assert llm_models() == ["deepseek-v4-flash", "deepseek-chat"]
 
 
 def test_bad_llm_reply_is_rejected():
@@ -151,6 +157,16 @@ def test_response_fallback_keeps_role_bite(monkeypatch):
     lowered = rendered.lower()
 
     assert any(marker in lowered for marker in ("бляд", "хер", "мать", "пельмень"))
+
+
+def test_message_context_includes_reply_text():
+    message = make_reply_message(reply_text="Сначала проверь ключ API.")
+    message.text = "почему не работает?"
+
+    context = build_message_context(message, "MoraleBot")
+
+    assert "Сначала проверь ключ API" in context
+    assert "почему не работает" in context
 
 
 def test_reply_to_bot_is_triggered_by_bot_id_or_username():

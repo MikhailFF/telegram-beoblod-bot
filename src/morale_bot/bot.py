@@ -21,8 +21,9 @@ LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PHRASE_DIR = PROJECT_ROOT / "data" / "phrases"
 GREETING_DIR = PROJECT_ROOT / "data" / "greetings"
-DEFAULT_LLM_API_BASE = "https://openrouter.ai/api/v1"
-DEFAULT_LLM_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
+DEFAULT_LLM_API_BASE = "https://api.deepseek.com"
+DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+DEFAULT_LLM_FALLBACK_MODELS = ("deepseek-chat",)
 MAX_REPLY_CHARS = 280
 DEFAULT_GREETING_STATE_PATH = PROJECT_ROOT / ".state" / "daily_greetings.json"
 PROFANITY_MARKERS = ("бляд", "хер", "хрен", "еб", "ёб", "пизд", "сука", "сран")
@@ -664,6 +665,27 @@ def strip_bot_reference(text: str, bot_username: str | None = None, bot_full_nam
     return compact_reply(cleaned, max_chars=500)
 
 
+def build_message_context(
+    message: Message,
+    bot_username: str | None = None,
+    bot_full_name: str | None = None,
+) -> str:
+    current_text = strip_bot_reference(getattr(message, "text", "") or "", bot_username, bot_full_name)
+    reply = getattr(message, "reply_to_message", None)
+    reply_text = ""
+    if reply:
+        reply_text = getattr(reply, "text", None) or getattr(reply, "caption", None) or ""
+
+    if reply_text:
+        return compact_reply(
+            f"Сообщение, на которое отвечает пользователь: {reply_text}. "
+            f"Новое сообщение пользователя: {current_text}",
+            max_chars=900,
+        )
+
+    return current_text
+
+
 def greeting_state_path() -> Path:
     configured_path = os.getenv("GREETING_STATE_PATH")
     if configured_path:
@@ -782,6 +804,19 @@ def llm_enabled() -> bool:
     return bool(api_key)
 
 
+def llm_models() -> list[str]:
+    model_names = [os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)]
+    fallback_models = os.getenv("LLM_FALLBACK_MODELS", ",".join(DEFAULT_LLM_FALLBACK_MODELS))
+    model_names.extend(model.strip() for model in fallback_models.split(",") if model.strip())
+
+    unique_model_names: list[str] = []
+    for model_name in model_names:
+        if model_name not in unique_model_names:
+            unique_model_names.append(model_name)
+
+    return unique_model_names
+
+
 def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> list[dict[str, str]]:
     greeting_rule = (
         "Сегодня с этим человеком еще не здоровались: начни с одного короткого грубовато-ласкательного приветствия "
@@ -797,6 +832,11 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
         "Ты ОБЯЗАН ответить строго на смысл сообщения пользователя, без ухода в случайную байку. "
         "Если вопрос практический - дай конкретное действие. Если человек устал или злится - коротко поддержи. "
         "Если это словесная ловушка или рифма - ответь в рифму. "
+        "Если сообщение содержит reply-контекст, сначала пойми связь между предыдущим сообщением и новым вопросом. "
+        "Не подменяй ответ случайной фразой из базы. База - только стилистическая приправа, не источник смысла. "
+        "Запрещено отвечать общими фразами про каптерку, устав, журнал или бардак, если это не отвечает на вопрос. "
+        "На вопрос 'что это значит' объясни значение. На 'можно ли' ответь да/нет и условие. На 'как сделать' дай шаг. "
+        "На 'почему' дай причину. На 'что делать' дай действие. "
         "Русский должен быть грамотный, живой и разговорный: без машинных ошибок, канцелярита и англицизмов. "
         "Ответы должны быть хлесткими, четкими, короткими и ударными. Никакой размазанной болтовни, "
         "штабной воды и интеллигентного мямления. Говори так, будто у тебя в одной руке кружка чая из каптерки, "
@@ -815,8 +855,8 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
         f"{greeting_rule}"
     )
     user_prompt = (
-        f"Сообщение в чате: {user_text}\n"
-        f"Черновик из локального банка, который можно переработать или отбросить: {draft}\n"
+        f"Контекст и сообщение пользователя: {user_text}\n"
+        f"Стилевая приправа из локальной базы, НЕ готовый ответ: {draft}\n"
         "Сделай финальный ответ строго в контексте сообщения. Одна фраза, 8-20 слов. "
         "Ответь только готовой репликой бота. Сначала смысл и польза, потом казарменная приправа."
     )
@@ -832,16 +872,8 @@ async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) ->
 
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     api_base = os.getenv("LLM_API_BASE", DEFAULT_LLM_API_BASE).rstrip("/")
-    model = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
     timeout = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
 
-    payload = {
-        "model": model,
-        "messages": build_llm_messages(user_text, draft, include_greeting),
-        "temperature": 0.35,
-        "top_p": 0.85,
-        "max_tokens": 70,
-    }
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -849,22 +881,34 @@ async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) ->
         "X-Title": "Telegram Beoblod Bot",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(f"{api_base}/chat/completions", json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-    except Exception as exc:
-        LOGGER.warning("LLM refinement failed: %s", exc)
-        return None
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for model in llm_models():
+            payload = {
+                "model": model,
+                "messages": build_llm_messages(user_text, draft, include_greeting),
+                "max_tokens": 70,
+            }
+            if "reasoner" not in model:
+                payload["temperature"] = 0.35
+                payload["top_p"] = 0.85
 
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        LOGGER.warning("LLM response did not contain a chat completion")
-        return None
+            try:
+                response = await client.post(f"{api_base}/chat/completions", json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as exc:
+                LOGGER.warning("LLM refinement failed for model %s: %s", model, exc)
+                continue
 
-    return finalize_llm_reply(content, draft)
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                LOGGER.warning("LLM response from model %s did not contain a chat completion", model)
+                continue
+
+            return finalize_llm_reply(content, draft)
+
+    return None
 
 
 def choose_emoji(text: str) -> str:
@@ -1020,10 +1064,11 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     include_greeting = should_greet_today(message)
+    user_context = build_message_context(message, bot_username, bot_full_name)
     LOGGER.info("Replying in chat %s to message %s", message.chat_id, message.message_id)
     await context.bot.send_message(
         chat_id=message.chat_id,
-        text=await build_response_text(message.text or "", bot_username, bot_full_name, include_greeting),
+        text=await build_response_text(user_context, bot_username, bot_full_name, include_greeting),
     )
 
 
