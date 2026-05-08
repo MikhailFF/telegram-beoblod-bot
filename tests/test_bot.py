@@ -130,12 +130,12 @@ def test_llm_prompt_controls_daily_greeting():
     assert "строго в контексте" in repeat_messages[1]["content"]
 
 
-def test_llm_uses_deepseek_model_with_fallback(monkeypatch):
+def test_llm_uses_deepseek_chat_model(monkeypatch):
     monkeypatch.delenv("LLM_MODEL", raising=False)
     monkeypatch.delenv("LLM_FALLBACK_MODELS", raising=False)
 
-    assert DEFAULT_LLM_MODEL == "deepseek-v4-flash"
-    assert llm_models() == ["deepseek-v4-flash", "deepseek-chat"]
+    assert DEFAULT_LLM_MODEL == "deepseek-chat"
+    assert llm_models() == ["deepseek-chat"]
 
 
 def test_bad_llm_reply_is_rejected():

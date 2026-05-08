@@ -22,8 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PHRASE_DIR = PROJECT_ROOT / "data" / "phrases"
 GREETING_DIR = PROJECT_ROOT / "data" / "greetings"
 DEFAULT_LLM_API_BASE = "https://api.deepseek.com"
-DEFAULT_LLM_MODEL = "deepseek-v4-flash"
-DEFAULT_LLM_FALLBACK_MODELS = ("deepseek-chat",)
+DEFAULT_LLM_MODEL = "deepseek-chat"
+DEFAULT_LLM_FALLBACK_MODELS: tuple[str, ...] = ()
 MAX_REPLY_CHARS = 280
 DEFAULT_GREETING_STATE_PATH = PROJECT_ROOT / ".state" / "daily_greetings.json"
 PROFANITY_MARKERS = ("бляд", "хер", "хрен", "еб", "ёб", "пизд", "сука", "сран")
@@ -906,7 +906,12 @@ async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) ->
                 LOGGER.warning("LLM response from model %s did not contain a chat completion", model)
                 continue
 
-            return finalize_llm_reply(content, draft)
+            cleaned_content = clean_llm_content(content)
+            if looks_like_bad_llm_reply(cleaned_content):
+                LOGGER.warning("LLM response from model %s was empty or unusable", model)
+                continue
+
+            return add_role_bite(cleaned_content)
 
     return None
 

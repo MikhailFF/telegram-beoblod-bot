@@ -49,8 +49,8 @@ LLM-слой опциональный. Бот настроен на OpenAI-compa
 ```dotenv
 LLM_ENABLED=auto
 LLM_API_BASE=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-flash
-LLM_FALLBACK_MODELS=deepseek-chat
+LLM_MODEL=deepseek-chat
+LLM_FALLBACK_MODELS=
 LLM_API_KEY=your_deepseek_key
 LLM_TIMEOUT_SECONDS=12
 GREETING_STATE_PATH=.state/daily_greetings.json
