@@ -27,6 +27,9 @@ DEFAULT_LLM_FALLBACK_MODELS: tuple[str, ...] = ()
 MAX_REPLY_CHARS = 280
 MAX_REPLY_WORDS = 26
 DEFAULT_GREETING_STATE_PATH = PROJECT_ROOT / ".state" / "daily_greetings.json"
+DEFAULT_USER_MEMORY_PATH = PROJECT_ROOT / ".state" / "user_reply_memory.json"
+MAX_USER_MEMORY_ITEMS = 120
+MAX_MEMORY_PROMPT_ITEMS = 6
 PROFANITY_MARKERS = ("бляд", "хер", "хрен", "еб", "ёб", "пизд", "сука", "сран")
 STYLE_ENDINGS = [
     "блядь",
@@ -332,6 +335,12 @@ CLOSINGS = [
 ]
 
 CAN_ANSWERS = [
+    "Можно Машку за ляжку, если Машка не против, а ты не пень без согласия.",
+    "Можно Марину за вагину только с согласием, романтик казарменный, а не в режиме самовольной херни.",
+    "Можно телегу с разбегу, но потом колеса сам собирай, пельмень тактический.",
+    "Можно козу на возу, если коза старшая по маршруту и не пишет рапорт.",
+    "Можно ложку в картошку, если столовая еще не объявила тревогу по пюре.",
+    "Можно кружку за дужку, только чай не пролей на ведомость, блядь.",
     "Можно. Но если потом прибежит проверка, я тебя первый раз вижу.",
     "Можно, боец. Только без цирка, без свидетелей и без фразы «я думал».",
     "Можно все, что не держит потолок и не подписано старшиной.",
@@ -360,8 +369,11 @@ RHYME_ANSWERS = {
         "Пятьсот? Чай остынет, пока ты смысл найдешь.",
     ],
     "можно": [
-        "Можно? Можно. Но потом не делай лицо, будто приказ сам пришел.",
+        "Можно? Можно Машку за ляжку, если Машка согласна, а ты не действуешь как табуретка.",
+        "Можно? Можно Марину за вагину только по взаимному согласию, без казарменной самодеятельности.",
         "Можно? Можно телегу с разбегу. Только колеса потом сам собирай.",
+        "Можно? Можно козу на возу, если коза не против службы по контракту.",
+        "Можно? Можно кружку за дужку, только не залей журнал, блядь.",
     ],
     "где": [
         "Где? В журнале написано. А журнал, как водится, пропал.",
@@ -701,6 +713,13 @@ def greeting_state_path() -> Path:
     return DEFAULT_GREETING_STATE_PATH
 
 
+def user_memory_path() -> Path:
+    configured_path = os.getenv("USER_MEMORY_PATH")
+    if configured_path:
+        return Path(configured_path)
+    return DEFAULT_USER_MEMORY_PATH
+
+
 def today_key() -> str:
     return datetime.now().date().isoformat()
 
@@ -728,6 +747,91 @@ def save_greeting_state(state: dict[str, str], state_path: Path | None = None) -
     temporary_path = path.with_suffix(f"{path.suffix}.tmp")
     temporary_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True), encoding="utf-8")
     temporary_path.replace(path)
+
+
+def load_user_memory(state_path: Path | None = None) -> list[dict[str, str]]:
+    path = state_path or user_memory_path()
+    if not path.exists():
+        return []
+
+    try:
+        raw_state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Could not read user memory from %s: %s", path, exc)
+        return []
+
+    if not isinstance(raw_state, list):
+        return []
+
+    memory: list[dict[str, str]] = []
+    for item in raw_state:
+        if isinstance(item, dict) and item.get("text"):
+            memory.append({str(key): str(value) for key, value in item.items()})
+    return memory
+
+
+def save_user_memory(memory: list[dict[str, str]], state_path: Path | None = None) -> None:
+    path = state_path or user_memory_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    limit = int(os.getenv("USER_MEMORY_MAX_ITEMS", str(MAX_USER_MEMORY_ITEMS)))
+    trimmed_memory = memory[-limit:]
+    temporary_path.write_text(json.dumps(trimmed_memory, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def remember_user_reply(
+    message: Message,
+    bot_id: int | None,
+    bot_username: str | None,
+    state_path: Path | None = None,
+) -> bool:
+    if not is_reply_to_bot(message, bot_id, bot_username):
+        return False
+
+    text = compact_reply(getattr(message, "text", "") or "", max_chars=300)
+    if not text or text.startswith("/"):
+        return False
+
+    user = getattr(message, "from_user", None)
+    entry = {
+        "chat_id": str(getattr(message, "chat_id", "")),
+        "user_id": str(getattr(user, "id", "")),
+        "username": str(getattr(user, "username", "")),
+        "text": text,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
+    memory = load_user_memory(state_path)
+    if memory and all(memory[-1].get(key) == entry.get(key) for key in ("chat_id", "user_id", "text")):
+        return False
+
+    memory.append(entry)
+    try:
+        save_user_memory(memory, state_path)
+    except OSError as exc:
+        LOGGER.warning("Could not save user memory: %s", exc)
+        return False
+
+    return True
+
+
+def relevant_user_memory(chat_id: int | str | None = None, state_path: Path | None = None) -> list[str]:
+    memory = load_user_memory(state_path)
+    if chat_id is not None:
+        chat_key = str(chat_id)
+        memory = [item for item in memory if item.get("chat_id") == chat_key]
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for item in reversed(memory):
+        text = item.get("text", "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        lines.append(text)
+        if len(lines) >= MAX_MEMORY_PROMPT_ITEMS:
+            break
+    return list(reversed(lines))
 
 
 def greeting_subject_key(message: Message) -> str:
@@ -762,6 +866,20 @@ def should_greet_today(
     return not already_greeted
 
 
+def is_advice_request(user_text: str) -> bool:
+    lowered = user_text.lower()
+    advice_markers = (
+        "совет",
+        "посоветуй",
+        "подскажи",
+        "что делать",
+        "как быть",
+        "как поступить",
+        "рекоменд",
+    )
+    return any(marker in lowered for marker in advice_markers)
+
+
 def choose_contextual_line(user_text: str) -> str:
     rhyme_answer = choose_rhyme_answer(user_text)
     if rhyme_answer:
@@ -769,6 +887,9 @@ def choose_contextual_line(user_text: str) -> str:
 
     if re.search(r"\bможно\b", user_text, re.IGNORECASE):
         return random.choice(CAN_ANSWERS)
+
+    if is_advice_request(user_text):
+        return random.choice(ADVICES)
 
     tokens = text_tokens(user_text)
     if not tokens:
@@ -825,7 +946,12 @@ def llm_models() -> list[str]:
     return unique_model_names
 
 
-def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> list[dict[str, str]]:
+def build_llm_messages(
+    user_text: str,
+    draft: str,
+    include_greeting: bool,
+    memory_lines: list[str] | None = None,
+) -> list[dict[str, str]]:
     greeting_rule = (
         "Сегодня с этим человеком еще не здоровались: начни с одного короткого грубовато-ласкательного приветствия "
         "или обращения в роли."
@@ -836,11 +962,12 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
     system_prompt = (
         "Ты играешь роль дерзкого, прожженного, слегка пьяного армейского прапорщика старой школы. "
         "Это оригинальный собирательный образ из казармы, каптерки, наряда и вечного утреннего построения, "
-        "а не копия конкретного персонажа. Отвечай по-русски. "
+        "с энергией старого прапора из российской казарменной комедии, но не копия конкретного персонажа и без цитат. Отвечай по-русски. "
         "Ты ОБЯЗАН ответить строго на смысл сообщения пользователя, без ухода в случайную байку. "
         "Если вопрос практический - дай конкретное действие. Если человек устал или злится - коротко поддержи. "
         "Если это словесная ловушка или рифма - ответь в рифму. "
         "Если сообщение содержит reply-контекст, сначала пойми связь между предыдущим сообщением и новым вопросом. "
+        "Если пользователь просит совет, дай именно совет: короткое действие, приоритет или предупреждение. "
         "Не подменяй ответ случайной фразой из базы. База - только стилистическая приправа, не источник смысла. "
         "Запрещено отвечать общими фразами про каптерку, устав, журнал или бардак, если это не отвечает на вопрос. "
         "Факты о текущем Telegram-боте: он работает в группах, личку игнорирует, отвечает на упоминание и на reply "
@@ -865,8 +992,13 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
         "Не используй Markdown, списки, кавычки и длинные объяснения. "
         f"{greeting_rule}"
     )
+    memory_prompt = ""
+    if memory_lines:
+        memory_prompt = "Живые реакции пользователей, из которых можно брать тон, но не копировать дословно: " + " | ".join(memory_lines)
+
     user_prompt = (
         f"Контекст и сообщение пользователя: {user_text}\n"
+        f"{memory_prompt}\n"
         f"Стилевая приправа из локальной базы, НЕ готовый ответ: {draft}\n"
         "Сделай финальный ответ строго в контексте сообщения. Одна фраза, 8-18 слов. "
         "Ответь только готовой репликой бота. Сначала смысл и польза, потом казарменная приправа."
@@ -877,7 +1009,12 @@ def build_llm_messages(user_text: str, draft: str, include_greeting: bool) -> li
     ]
 
 
-async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) -> str | None:
+async def refine_with_llm(
+    user_text: str,
+    draft: str,
+    include_greeting: bool,
+    memory_lines: list[str] | None = None,
+) -> str | None:
     if not llm_enabled():
         return None
 
@@ -896,7 +1033,7 @@ async def refine_with_llm(user_text: str, draft: str, include_greeting: bool) ->
         for model in llm_models():
             payload = {
                 "model": model,
-                "messages": build_llm_messages(user_text, draft, include_greeting),
+                "messages": build_llm_messages(user_text, draft, include_greeting, memory_lines),
                 "max_tokens": 70,
             }
             if "reasoner" not in model:
@@ -1007,10 +1144,11 @@ async def build_response_text(
     bot_username: str | None = None,
     bot_full_name: str | None = None,
     include_greeting: bool = True,
+    memory_lines: list[str] | None = None,
 ) -> str:
     cleaned_user_text = strip_bot_reference(user_text, bot_username, bot_full_name)
     draft = build_local_reply_text(cleaned_user_text, bot_username, bot_full_name, include_greeting)
-    refined = await refine_with_llm(cleaned_user_text, draft, include_greeting)
+    refined = await refine_with_llm(cleaned_user_text, draft, include_greeting, memory_lines)
     return refined or add_role_bite(draft)
 
 
@@ -1071,20 +1209,25 @@ async def reply_when_mentioned(update: Update, context: ContextTypes.DEFAULT_TYP
         message.text,
     )
 
-    is_triggered = is_mentioned(message, bot_username, bot_full_name) or is_reply_to_bot(
+    mentioned = is_mentioned(message, bot_username, bot_full_name)
+    reply_triggered = is_reply_to_bot(
         message,
         bot_id,
         bot_username,
     )
-    if not is_triggered:
+    if reply_triggered:
+        remember_user_reply(message, bot_id, bot_username)
+
+    if not (mentioned or reply_triggered):
         return
 
     include_greeting = should_greet_today(message)
     user_context = build_message_context(message, bot_username, bot_full_name)
+    memory_lines = relevant_user_memory(message.chat_id)
     LOGGER.info("Replying in chat %s to message %s", message.chat_id, message.message_id)
     await context.bot.send_message(
         chat_id=message.chat_id,
-        text=await build_response_text(user_context, bot_username, bot_full_name, include_greeting),
+        text=await build_response_text(user_context, bot_username, bot_full_name, include_greeting, memory_lines),
     )
 
 

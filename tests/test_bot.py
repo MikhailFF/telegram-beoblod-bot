@@ -3,7 +3,9 @@ from pathlib import Path
 import asyncio
 
 from morale_bot.bot import (
+    ADVICES,
     BotReply,
+    CAN_ANSWERS,
     EXTERNAL_GREETINGS,
     EXTERNAL_PHRASES,
     GREETINGS,
@@ -27,7 +29,12 @@ from morale_bot.bot import (
     is_reply_to_bot,
     is_private_update,
     is_mentioned,
+    is_advice_request,
+    load_user_memory,
     normalize_username,
+    relevant_user_memory,
+    remember_user_reply,
+    save_user_memory,
     should_greet_today,
 )
 
@@ -103,6 +110,11 @@ def test_contextual_reply_uses_message_tokens():
     assert "устал" in line.lower()
 
 
+def test_advice_request_uses_advice_bank():
+    assert is_advice_request("дай совет по делу")
+    assert choose_contextual_line("дай совет по делу") in ADVICES
+
+
 def test_local_reply_is_one_short_line():
     rendered = build_local_reply_text("@MoraleBot я устал")
     assert "\n" not in rendered
@@ -129,6 +141,46 @@ def test_should_greet_today_only_once_per_user():
         state_path.with_suffix(f"{state_path.suffix}.tmp").unlink(missing_ok=True)
 
 
+def test_user_reply_memory_records_replies_to_bot():
+    state_path = Path("tests") / ".user_memory_test.json"
+    message = make_reply_message(reply_user_id=42, reply_username="MoraleBot")
+    message.chat_id = -100
+    message.from_user = SimpleNamespace(id=123, username="soldier")
+    message.text = "short field reaction"
+
+    try:
+        assert remember_user_reply(message, 42, "MoraleBot", state_path)
+        memory = load_user_memory(state_path)
+
+        assert memory[-1]["chat_id"] == "-100"
+        assert memory[-1]["user_id"] == "123"
+        assert memory[-1]["text"] == "short field reaction"
+        assert relevant_user_memory(-100, state_path) == ["short field reaction"]
+    finally:
+        state_path.unlink(missing_ok=True)
+        state_path.with_suffix(f"{state_path.suffix}.tmp").unlink(missing_ok=True)
+
+
+def test_user_reply_memory_trims_and_deduplicates(monkeypatch):
+    state_path = Path("tests") / ".user_memory_trim_test.json"
+    monkeypatch.setenv("USER_MEMORY_MAX_ITEMS", "2")
+    memory = [
+        {"chat_id": "-100", "user_id": "1", "text": "first"},
+        {"chat_id": "-100", "user_id": "2", "text": "second"},
+        {"chat_id": "-100", "user_id": "3", "text": "second"},
+        {"chat_id": "-100", "user_id": "4", "text": "third"},
+    ]
+
+    try:
+        save_user_memory(memory, state_path)
+
+        assert [item["text"] for item in load_user_memory(state_path)] == ["second", "third"]
+        assert relevant_user_memory(-100, state_path) == ["second", "third"]
+    finally:
+        state_path.unlink(missing_ok=True)
+        state_path.with_suffix(f"{state_path.suffix}.tmp").unlink(missing_ok=True)
+
+
 def test_llm_prompt_controls_daily_greeting():
     first_messages = build_llm_messages("СЏ СѓСЃС‚Р°Р»", "draft", include_greeting=True)
     repeat_messages = build_llm_messages("СЏ СѓСЃС‚Р°Р»", "draft", include_greeting=False)
@@ -136,6 +188,12 @@ def test_llm_prompt_controls_daily_greeting():
     assert "еще не здоровались" in first_messages[0]["content"]
     assert "НЕ здоровайся" in repeat_messages[0]["content"]
     assert "строго в контексте" in repeat_messages[1]["content"]
+
+
+def test_llm_prompt_includes_user_memory():
+    messages = build_llm_messages("give advice", "draft", include_greeting=False, memory_lines=["user liked short answers"])
+
+    assert "user liked short answers" in messages[1]["content"]
 
 
 def test_llm_uses_deepseek_chat_model(monkeypatch):
@@ -212,6 +270,11 @@ def test_build_reply_has_content_for_mozhno():
     reply = build_reply("@MoraleBot можно?")
     assert reply.joke
     assert len(reply.greeting) > 0
+
+
+def test_mozhno_bank_has_expanded_rhymes():
+    assert any("Машку" in answer for answer in CAN_ANSWERS)
+    assert any("Телегу" in answer or "телегу" in answer for answer in CAN_ANSWERS)
 
 
 def test_choose_rhyme_answer_for_trigger_word():
