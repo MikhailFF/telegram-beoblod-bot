@@ -188,6 +188,7 @@ def test_llm_prompt_controls_daily_greeting():
     assert "еще не здоровались" in first_messages[0]["content"]
     assert "НЕ здоровайся" in repeat_messages[0]["content"]
     assert "строго в контексте" in repeat_messages[1]["content"]
+    assert "Не придумывай кнопки" in repeat_messages[0]["content"]
 
 
 def test_llm_prompt_includes_user_memory():
